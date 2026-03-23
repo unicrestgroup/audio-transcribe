@@ -221,28 +221,26 @@ async function loadModel() {
   }
 }
 
-// Transcribe using pipeline's built-in chunking
-async function transcribeFile(audio, duration) {
-  const startTime = Date.now();
-  const mins = Math.floor(duration / 60);
-  const secs = Math.floor(duration % 60);
-  $('progress-text').textContent = `Transcribing ${mins}m ${secs}s of audio. This will take a while, the page will stay responsive...`;
-  $('progress-bar').style.width = '55%';
+// Check if an audio chunk is mostly silence
+function issilent(samples, threshold) {
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  const rms = Math.sqrt(sum / samples.length);
+  return rms < (threshold || 0.005);
+}
 
-  const res = await transcriber(audio, {
-    language: $('file-lang').value,
-    task: 'transcribe',
-    return_timestamps: true,
-    chunk_length_s: 30,
-    stride_length_s: 5,
-  });
-
-  const totalElapsed = Math.floor((Date.now() - startTime) / 1000);
-  const eMin = Math.floor(totalElapsed / 60);
-  const eSec = totalElapsed % 60;
-  $('progress-text').textContent = `Done in ${eMin}m ${eSec}s`;
-
-  return { text: res.text || '', chunks: res.chunks || [] };
+// Detect repeated hallucination (same phrase 3+ times)
+function isHallucinated(text) {
+  const words = text.trim().split(/\s+/);
+  if (words.length < 6) return false;
+  // Check for repeated n-grams (4-word windows)
+  const ngrams = {};
+  for (let i = 0; i <= words.length - 4; i++) {
+    const gram = words.slice(i, i + 4).join(' ').toLowerCase();
+    ngrams[gram] = (ngrams[gram] || 0) + 1;
+    if (ngrams[gram] >= 3) return true;
+  }
+  return false;
 }
 
 $('transcribe-btn').addEventListener('click', async () => {
@@ -254,49 +252,111 @@ $('transcribe-btn').addEventListener('click', async () => {
   $('timestamps-container').innerHTML = '';
   lastChunks = [];
 
-  // Elapsed timer so user can see the page is alive
-  let elapsedSec = 0;
-  let audioDur = 0;
-  const timer = setInterval(() => {
-    elapsedSec++;
-    const m = Math.floor(elapsedSec / 60);
-    const s = elapsedSec % 60;
-    const durStr = audioDur ? ` of ${Math.floor(audioDur/60)}m ${Math.floor(audioDur%60)}s audio` : '';
-    $('progress-text').textContent = `Transcribing${durStr}... elapsed ${m}m ${String(s).padStart(2,'0')}s`;
-  }, 1000);
-
   try {
     // Step 1: Decode audio
     const { audio, duration } = await decodeAudio(selFile);
-    audioDur = duration;
     $('progress-bar').style.width = '10%';
 
     // Step 2: Load model
     await loadModel();
-    $('progress-bar').style.width = '50%';
+    $('progress-bar').style.width = '45%';
 
-    // Step 3: Transcribe with pipeline's proper chunking
-    const res = await transcribeFile(audio, duration);
+    // Step 3: Chunk and transcribe progressively
+    const CHUNK_S = 30;
+    const sr = 16000;
+    const totalChunks = Math.ceil(duration / CHUNK_S);
+    let allText = '';
+    let allChunks = [];
+    const startTime = Date.now();
 
-    clearInterval(timer);
-    $('progress-bar').style.width = '100%';
-    const eMin = Math.floor(elapsedSec / 60);
-    const eSec = elapsedSec % 60;
-    $('progress-text').textContent = `Done in ${eMin}m ${eSec}s`;
-    $('file-transcript').value = res.text.trim();
+    // Show timestamps area for progressive display
+    if ($('show-timestamps').checked) {
+      $('timestamps-container').classList.add('visible');
+      $('file-transcript').style.display = 'none';
+    }
 
-    if (res.chunks.length > 0) {
-      lastChunks = res.chunks;
-      if ($('show-timestamps').checked) {
-        renderTS(lastChunks);
-        $('timestamps-container').classList.add('visible');
-        $('file-transcript').style.display = 'none';
+    for (let i = 0; i < totalChunks; i++) {
+      const startSec = i * CHUNK_S;
+      const endSec = Math.min(startSec + CHUNK_S, duration);
+      const startSamp = Math.floor(startSec * sr);
+      const endSamp = Math.min(Math.floor(endSec * sr), audio.length);
+      const chunk = audio.slice(startSamp, endSamp);
+
+      // Update progress
+      const elapsed = (Date.now() - startTime) / 1000;
+      const perChunk = i > 0 ? elapsed / i : 30;
+      const remaining = perChunk * (totalChunks - i);
+      const remMin = Math.floor(remaining / 60);
+      const remSec = Math.floor(remaining % 60);
+      const pct = 45 + ((i / totalChunks) * 55);
+      $('progress-bar').style.width = pct + '%';
+      $('progress-text').textContent = `Segment ${i + 1} of ${totalChunks}` + (i > 0 ? ` (about ${remMin}m ${remSec}s left)` : '');
+
+      // Yield to UI
+      await new Promise(r => setTimeout(r, 20));
+
+      // Skip silence
+      if (issilent(chunk)) {
+        continue;
       }
+
+      const res = await transcriber(chunk, {
+        language: $('file-lang').value,
+        task: 'transcribe',
+        return_timestamps: true,
+      });
+
+      const text = (res.text || '').trim();
+
+      // Skip hallucinated output
+      if (!text || isHallucinated(text)) continue;
+
+      allText += (allText ? ' ' : '') + text;
+      $('file-transcript').value = allText;
+
+      // Scroll transcript to bottom
+      $('file-transcript').scrollTop = $('file-transcript').scrollHeight;
+
+      if (res.chunks) {
+        const offset = res.chunks.map(c => ({
+          text: c.text,
+          timestamp: [
+            (c.timestamp?.[0] ?? 0) + startSec,
+            (c.timestamp?.[1] ?? 0) + startSec
+          ]
+        }));
+        allChunks.push(...offset);
+
+        // Progressive timestamp display
+        if ($('show-timestamps').checked) {
+          offset.forEach(c => {
+            const d = document.createElement('div');
+            d.className = 'ts-line';
+            d.innerHTML = `<span class="ts-time">${dts(c.timestamp[0])} \u2192 ${dts(c.timestamp[1])}</span><span class="ts-text">${c.text}</span>`;
+            $('timestamps-container').appendChild(d);
+          });
+          $('timestamps-container').scrollTop = $('timestamps-container').scrollHeight;
+        }
+      }
+
+      fileBtns();
+    }
+
+    // Final
+    $('progress-bar').style.width = '100%';
+    lastChunks = allChunks;
+    const totalSec = Math.floor((Date.now() - startTime) / 1000);
+    $('progress-text').textContent = `Done in ${Math.floor(totalSec/60)}m ${totalSec%60}s`;
+
+    // Re-render clean timestamps at the end
+    if (lastChunks.length > 0 && $('show-timestamps').checked) {
+      renderTS(lastChunks);
+      $('timestamps-container').classList.add('visible');
+      $('file-transcript').style.display = 'none';
     }
     fileBtns();
     setTimeout(() => $('progress-wrap').classList.remove('visible'), 3000);
   } catch (err) {
-    clearInterval(timer);
     console.error(err);
     $('progress-text').textContent = err.message;
     $('progress-bar').style.width = '0%';
