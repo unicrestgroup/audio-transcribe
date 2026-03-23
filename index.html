@@ -461,10 +461,6 @@
   <!-- ===== FILE PANEL ===== -->
   <div class="panel" id="panel-file">
 
-    <div id="deploy-notice" style="padding:10px 14px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.15);border-radius:8px;font-size:11px;color:#b0b0b0;line-height:1.5;display:none;">
-      <strong style="color:#ef4444;">Deployment required:</strong> File transcription downloads AI models from Hugging Face, which is blocked in this preview. Download this HTML file and host it on GitHub Pages, Netlify, or Vercel. The live mic tab works here.
-    </div>
-
     <div class="upload-zone" id="upload-zone">
       <input type="file" id="file-input" accept="audio/*,video/*,.mp3,.wav,.m4a,.ogg,.flac,.webm,.mp4,.mkv,.avi,.mov,.aac,.wma">
       <div class="upload-icon">📁</div>
@@ -825,18 +821,6 @@ transcribeBtn.addEventListener('click', async () => {
   lastChunks = [];
 
   try {
-    // Step 0: Test connectivity to Hugging Face
-    progressText.textContent = 'Checking connection to Hugging Face...';
-    const testUrl = 'https://huggingface.co/api/models/Xenova/whisper-tiny.en';
-    try {
-      const testResp = await fetch(testUrl, { method: 'HEAD', mode: 'cors' });
-      if (!testResp.ok) {
-        throw new Error('Hugging Face returned status ' + testResp.status + '. The model server may be temporarily unavailable. Try again in a minute.');
-      }
-    } catch (connErr) {
-      throw new Error('Cannot reach huggingface.co from this domain. Try deploying on Netlify or Vercel instead, or open the HTML file directly from your computer (File → Open). Detail: ' + connErr.message);
-    }
-
     // Step 1: Decode audio
     progressText.textContent = 'Decoding audio...';
     const audioData = await decodeAudioFile(selectedFile);
@@ -846,10 +830,12 @@ transcribeBtn.addEventListener('click', async () => {
     // Step 2: Load model if needed
     const modelId = modelSelect.value;
     if (!transcriber || currentModel !== modelId) {
-      const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.4.1');
+      const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+      env.allowLocalModels = false;
+      env.useBrowserCache = false;
 
       transcriber = await pipeline('automatic-speech-recognition', modelId, {
-        device: 'wasm',
+        quantized: true,
         progress_callback: (progress) => {
           if (progress.status === 'downloading' || progress.status === 'progress') {
             const pct = progress.progress ? Math.round(progress.progress) : 0;
@@ -963,15 +949,6 @@ fileClear.addEventListener('click', () => {
   lastChunks = [];
   updateFileButtons();
 });
-
-// Detect sandboxed environment and show notice
-try {
-  if (window.self !== window.top) {
-    document.getElementById('deploy-notice').style.display = 'block';
-  }
-} catch(e) {
-  document.getElementById('deploy-notice').style.display = 'block';
-}
 </script>
 </body>
 </html>
