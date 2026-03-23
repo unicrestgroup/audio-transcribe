@@ -220,93 +220,39 @@ async function loadModel() {
 }
 
 // Chunk audio into segments and transcribe progressively
-async function transcribeChunked(audio, duration) {
-  const CHUNK = 30; // seconds per chunk
-  const STRIDE = 5; // overlap seconds
-  const sr = 16000;
-  const totalChunks = Math.ceil(duration / (CHUNK - STRIDE));
-  let allText = '';
-  let allChunks = [];
+async function transcribeFile(audio, duration) {
   const startTime = Date.now();
+  const totalChunks = Math.ceil(duration / 30);
+  let chunksDone = 0;
 
-  // Show timestamps panel immediately for progressive display
-  if ($('show-timestamps').checked) {
-    $('timestamps-container').classList.add('visible');
-    $('file-transcript').style.display = 'none';
-  }
+  $('progress-text').textContent = `Transcribing ${Math.floor(duration / 60)}m ${Math.floor(duration % 60)}s of audio (${totalChunks} segments)...`;
 
-  for (let i = 0; i < totalChunks; i++) {
-    const startSec = i * (CHUNK - STRIDE);
-    const endSec = Math.min(startSec + CHUNK, duration);
-    const startSample = Math.floor(startSec * sr);
-    const endSample = Math.min(Math.floor(endSec * sr), audio.length);
-    const chunk = audio.slice(startSample, endSample);
-
-    // Progress info
-    const elapsed = (Date.now() - startTime) / 1000;
-    const perChunk = i > 0 ? elapsed / i : 0;
-    const remaining = perChunk * (totalChunks - i);
-    const remMin = Math.floor(remaining / 60);
-    const remSec = Math.floor(remaining % 60);
-    const pct = 50 + ((i / totalChunks) * 50);
-    $('progress-bar').style.width = pct + '%';
-
-    if (i > 0) {
-      $('progress-text').textContent = `Chunk ${i + 1} of ${totalChunks} (about ${remMin}m ${remSec}s remaining)`;
-    } else {
-      $('progress-text').textContent = `Chunk ${i + 1} of ${totalChunks}...`;
-    }
-
-    // Yield to UI before heavy processing
-    await new Promise(r => setTimeout(r, 10));
-
-    const res = await transcriber(chunk, {
-      language: $('file-lang').value,
-      task: 'transcribe',
-      return_timestamps: true,
-    });
-
-    // Offset timestamps to match position in full file
-    const text = (res.text || '').trim();
-    if (text) {
-      allText += (allText ? ' ' : '') + text;
-      $('file-transcript').value = allText;
-    }
-
-    if (res.chunks) {
-      const offsetChunks = res.chunks.map(c => ({
-        text: c.text,
-        timestamp: [
-          (c.timestamp?.[0] ?? 0) + startSec,
-          (c.timestamp?.[1] ?? 0) + startSec
-        ]
-      }));
-      allChunks.push(...offsetChunks);
-
-      // Progressive timestamp display
-      if ($('show-timestamps').checked) {
-        offsetChunks.forEach(c => {
-          const d = document.createElement('div');
-          d.className = 'ts-line';
-          const s = c.timestamp[0], e = c.timestamp[1];
-          d.innerHTML = `<span class="ts-time">${dts(s)} \u2192 ${dts(e)}</span><span class="ts-text">${c.text}</span>`;
-          $('timestamps-container').appendChild(d);
-        });
-        // Auto-scroll to latest
-        $('timestamps-container').scrollTop = $('timestamps-container').scrollHeight;
-      }
-    }
-
-    // Enable buttons progressively
-    fileBtns();
-  }
+  // Use the pipeline's built-in chunking (handles overlap and context correctly)
+  const res = await transcriber(audio, {
+    language: $('file-lang').value,
+    task: 'transcribe',
+    return_timestamps: true,
+    chunk_length_s: 30,
+    stride_length_s: 5,
+    chunk_callback: (chunk) => {
+      chunksDone++;
+      const elapsed = (Date.now() - startTime) / 1000;
+      const perChunk = elapsed / chunksDone;
+      const remaining = perChunk * (totalChunks - chunksDone);
+      const remMin = Math.floor(remaining / 60);
+      const remSec = Math.floor(remaining % 60);
+      const pct = 50 + ((chunksDone / totalChunks) * 50);
+      $('progress-bar').style.width = Math.min(pct, 99) + '%';
+      $('progress-text').textContent = `Segment ${chunksDone} of ${totalChunks} (about ${remMin}m ${remSec}s remaining)`;
+    },
+  });
 
   const totalElapsed = Math.floor((Date.now() - startTime) / 1000);
   const eMin = Math.floor(totalElapsed / 60);
   const eSec = totalElapsed % 60;
-  $('progress-text').textContent = `Done. ${totalChunks} chunks processed in ${eMin}m ${eSec}s`;
+  $('progress-text').textContent = `Done in ${eMin}m ${eSec}s`;
 
-  return { text: allText, chunks: allChunks };
+  return { text: res.text || '', chunks: res.chunks || [] };
 }
 
 $('transcribe-btn').addEventListener('click', async () => {
@@ -319,7 +265,7 @@ $('transcribe-btn').addEventListener('click', async () => {
   lastChunks = [];
 
   try {
-    // Step 1: Decode audio efficiently
+    // Step 1: Decode audio
     const { audio, duration } = await decodeAudio(selFile);
     $('progress-bar').style.width = '10%';
 
@@ -327,8 +273,8 @@ $('transcribe-btn').addEventListener('click', async () => {
     await loadModel();
     $('progress-bar').style.width = '50%';
 
-    // Step 3: Transcribe in chunks with progressive output
-    const res = await transcribeChunked(audio, duration);
+    // Step 3: Transcribe with pipeline's proper chunking
+    const res = await transcribeFile(audio, duration);
 
     $('progress-bar').style.width = '100%';
     $('file-transcript').value = res.text.trim();
