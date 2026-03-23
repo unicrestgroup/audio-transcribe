@@ -203,6 +203,8 @@ async function loadModel() {
     env.allowLocalModels = false;
     env.useBrowserCache = true;
     env.remoteHost = window.location.origin + '/hf';
+    // Run WASM inference in a Web Worker so the UI thread stays responsive
+    env.backends.onnx.wasm.proxy = true;
     transcriber = await pipeline('automatic-speech-recognition', mid, {
       quantized: true,
       progress_callback: p => {
