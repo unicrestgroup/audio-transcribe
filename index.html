@@ -204,7 +204,7 @@ async function loadModel() {
     env.useBrowserCache = true;
     env.remoteHost = window.location.origin + '/hf';
     // Run WASM inference in a Web Worker so the UI thread stays responsive
-    env.backends.onnx.wasm.proxy = true;
+    try { env.backends.onnx.wasm.proxy = true; } catch(e) { /* older builds may not support this */ }
     transcriber = await pipeline('automatic-speech-recognition', mid, {
       quantized: true,
       progress_callback: p => {
@@ -221,32 +221,20 @@ async function loadModel() {
   }
 }
 
-// Chunk audio into segments and transcribe progressively
+// Transcribe using pipeline's built-in chunking
 async function transcribeFile(audio, duration) {
   const startTime = Date.now();
-  const totalChunks = Math.ceil(duration / 30);
-  let chunksDone = 0;
+  const mins = Math.floor(duration / 60);
+  const secs = Math.floor(duration % 60);
+  $('progress-text').textContent = `Transcribing ${mins}m ${secs}s of audio. This will take a while, the page will stay responsive...`;
+  $('progress-bar').style.width = '55%';
 
-  $('progress-text').textContent = `Transcribing ${Math.floor(duration / 60)}m ${Math.floor(duration % 60)}s of audio (${totalChunks} segments)...`;
-
-  // Use the pipeline's built-in chunking (handles overlap and context correctly)
   const res = await transcriber(audio, {
     language: $('file-lang').value,
     task: 'transcribe',
     return_timestamps: true,
     chunk_length_s: 30,
     stride_length_s: 5,
-    chunk_callback: (chunk) => {
-      chunksDone++;
-      const elapsed = (Date.now() - startTime) / 1000;
-      const perChunk = elapsed / chunksDone;
-      const remaining = perChunk * (totalChunks - chunksDone);
-      const remMin = Math.floor(remaining / 60);
-      const remSec = Math.floor(remaining % 60);
-      const pct = 50 + ((chunksDone / totalChunks) * 50);
-      $('progress-bar').style.width = Math.min(pct, 99) + '%';
-      $('progress-text').textContent = `Segment ${chunksDone} of ${totalChunks} (about ${remMin}m ${remSec}s remaining)`;
-    },
   });
 
   const totalElapsed = Math.floor((Date.now() - startTime) / 1000);
@@ -266,9 +254,21 @@ $('transcribe-btn').addEventListener('click', async () => {
   $('timestamps-container').innerHTML = '';
   lastChunks = [];
 
+  // Elapsed timer so user can see the page is alive
+  let elapsedSec = 0;
+  let audioDur = 0;
+  const timer = setInterval(() => {
+    elapsedSec++;
+    const m = Math.floor(elapsedSec / 60);
+    const s = elapsedSec % 60;
+    const durStr = audioDur ? ` of ${Math.floor(audioDur/60)}m ${Math.floor(audioDur%60)}s audio` : '';
+    $('progress-text').textContent = `Transcribing${durStr}... elapsed ${m}m ${String(s).padStart(2,'0')}s`;
+  }, 1000);
+
   try {
     // Step 1: Decode audio
     const { audio, duration } = await decodeAudio(selFile);
+    audioDur = duration;
     $('progress-bar').style.width = '10%';
 
     // Step 2: Load model
@@ -278,7 +278,11 @@ $('transcribe-btn').addEventListener('click', async () => {
     // Step 3: Transcribe with pipeline's proper chunking
     const res = await transcribeFile(audio, duration);
 
+    clearInterval(timer);
     $('progress-bar').style.width = '100%';
+    const eMin = Math.floor(elapsedSec / 60);
+    const eSec = elapsedSec % 60;
+    $('progress-text').textContent = `Done in ${eMin}m ${eSec}s`;
     $('file-transcript').value = res.text.trim();
 
     if (res.chunks.length > 0) {
@@ -292,6 +296,7 @@ $('transcribe-btn').addEventListener('click', async () => {
     fileBtns();
     setTimeout(() => $('progress-wrap').classList.remove('visible'), 3000);
   } catch (err) {
+    clearInterval(timer);
     console.error(err);
     $('progress-text').textContent = err.message;
     $('progress-bar').style.width = '0%';
