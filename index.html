@@ -262,13 +262,31 @@ $('transcribe-btn').addEventListener('click', async () => {
     $('progress-bar').style.width = '10%';
     $('progress-text').textContent = `Audio decoded: ${mins}m ${secs}s. Starting worker...`;
 
-    // Elapsed timer (runs on main thread, always updates)
+    // Estimate processing time based on model and duration
+    // Rough multipliers: tiny ~2x, base ~3x, small ~5x real-time on average hardware
+    const model = $('model-select').value;
+    const multiplier = model.includes('tiny') ? 2 : model.includes('base') ? 3 : 5;
+    const estSeconds = Math.ceil(duration * multiplier);
+    const estMin = Math.floor(estSeconds / 60);
+    const estSec = estSeconds % 60;
+
+    // Elapsed timer with estimated remaining
     let elapsedSec = 0;
+    let transcribing = false;
+    let transcribeStart = 0;
     const timer = setInterval(() => {
       elapsedSec++;
-      const m = Math.floor(elapsedSec / 60);
-      const s = elapsedSec % 60;
-      $('progress-text').textContent = `Transcribing ${mins}m ${secs}s of audio... elapsed ${m}m ${String(s).padStart(2,'0')}s`;
+      if (transcribing) {
+        const tElapsed = Math.floor((Date.now() - transcribeStart) / 1000);
+        const remaining = Math.max(0, estSeconds - tElapsed);
+        const rMin = Math.floor(remaining / 60);
+        const rSec = remaining % 60;
+        const eMin = Math.floor(tElapsed / 60);
+        const eSec = tElapsed % 60;
+        const pct = Math.min(50 + (tElapsed / estSeconds) * 49, 99);
+        $('progress-bar').style.width = pct + '%';
+        $('progress-text').textContent = `Transcribing ${mins}m ${secs}s of audio... ${eMin}m ${String(eSec).padStart(2,'0')}s elapsed, about ${rMin}m ${String(rSec).padStart(2,'0')}s remaining`;
+      }
     }, 1000);
 
     // Send to worker
@@ -292,7 +310,9 @@ $('transcribe-btn').addEventListener('click', async () => {
         } else if (msg.type === 'status') {
           if (msg.text === 'Transcribing...') {
             $('progress-bar').style.width = '50%';
-            // Timer takes over status text from here
+            $('progress-text').textContent = `Transcribing ${mins}m ${secs}s of audio... estimated ${estMin}m ${String(estSec).padStart(2,'0')}s`;
+            transcribing = true;
+            transcribeStart = Date.now();
           } else {
             $('progress-text').textContent = msg.text;
           }
@@ -311,7 +331,7 @@ $('transcribe-btn').addEventListener('click', async () => {
       w.postMessage({
         type: 'transcribe',
         audio: audioData,
-        modelId: $('model-select').value,
+        modelId: model,
         language: $('file-lang').value,
         remoteHost: window.location.origin + '/hf',
       }, [audioData.buffer]);
@@ -321,9 +341,10 @@ $('transcribe-btn').addEventListener('click', async () => {
 
     // Display results
     $('progress-bar').style.width = '100%';
-    const eMin = Math.floor(elapsedSec / 60);
-    const eSec = elapsedSec % 60;
-    $('progress-text').textContent = `Done in ${eMin}m ${eSec}s`;
+    const totalSec = Math.floor((Date.now() - transcribeStart) / 1000);
+    const tMin = Math.floor(totalSec / 60);
+    const tSec = totalSec % 60;
+    $('progress-text').textContent = `Done in ${tMin}m ${tSec}s`;
 
     $('file-transcript').value = (result.text || '').trim();
 
