@@ -199,26 +199,35 @@ async function loadModel() {
   const mid = $('model-select').value;
   if (!transcriber || curModel !== mid) {
     $('progress-text').textContent = 'Loading Whisper model (first time downloads it)...';
-    const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+    const transformers = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+    const { pipeline, env } = transformers;
     env.allowLocalModels = false;
     env.useBrowserCache = true;
     env.remoteHost = window.location.origin + '/hf';
-    // Run WASM inference in a Web Worker so the UI thread stays responsive
-    try { env.backends.onnx.wasm.proxy = true; } catch(e) { /* older builds may not support this */ }
     transcriber = await pipeline('automatic-speech-recognition', mid, {
       quantized: true,
       progress_callback: p => {
-        if (p.status === 'downloading' || p.status === 'progress') {
+        if (p.status === 'progress') {
           const pct = p.progress ? Math.round(p.progress) : 0;
           $('progress-bar').style.width = (10 + pct * 0.35) + '%';
           $('progress-text').textContent = `Downloading model... ${pct}%`;
-        } else if (p.status === 'loading') {
-          $('progress-text').textContent = 'Loading model into memory...';
+        } else if (p.status === 'done') {
+          $('progress-bar').style.width = '45%';
+          $('progress-text').textContent = 'Initialising model (this can take 30-60 seconds for larger models)...';
+        } else if (p.status === 'ready') {
+          $('progress-text').textContent = 'Model ready.';
+        } else if (p.status === 'initiate') {
+          $('progress-text').textContent = 'Fetching model files...';
         }
       }
     });
     curModel = mid;
   }
+}
+
+// Force browser to repaint before continuing
+function repaint() {
+  return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 }
 
 // Check if an audio chunk is mostly silence
@@ -292,8 +301,8 @@ $('transcribe-btn').addEventListener('click', async () => {
       $('progress-bar').style.width = pct + '%';
       $('progress-text').textContent = `Segment ${i + 1} of ${totalChunks}` + (i > 0 ? ` (about ${remMin}m ${remSec}s left)` : '');
 
-      // Yield to UI
-      await new Promise(r => setTimeout(r, 20));
+      // Force UI repaint so progress and text are visible
+      await repaint();
 
       // Skip silence
       if (issilent(chunk)) {
@@ -314,8 +323,9 @@ $('transcribe-btn').addEventListener('click', async () => {
       allText += (allText ? ' ' : '') + text;
       $('file-transcript').value = allText;
 
-      // Scroll transcript to bottom
+      // Scroll transcript to bottom and force repaint
       $('file-transcript').scrollTop = $('file-transcript').scrollHeight;
+      await repaint();
 
       if (res.chunks) {
         const offset = res.chunks.map(c => ({
