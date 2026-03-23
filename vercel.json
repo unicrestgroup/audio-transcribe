@@ -3,6 +3,10 @@
     {
       "source": "/hf/:path*",
       "destination": "https://huggingface.co/:path*"
+    },
+    {
+      "source": "/api/resolve-cache/:path*",
+      "destination": "https://huggingface.co/api/resolve-cache/:path*"
     }
   ]
 }
