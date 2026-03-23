@@ -829,10 +829,25 @@ transcribeBtn.addEventListener('click', async () => {
 
     // Step 2: Load model if needed
     const modelId = modelSelect.value;
+
+    // Proxy HuggingFace requests to avoid browser 403 blocks
+    if (!window._hfProxied) {
+      const _origFetch = window.fetch;
+      window.fetch = function(url, opts) {
+        if (typeof url === 'string' && url.includes('huggingface.co')) {
+          url = 'https://corsproxy.io/?' + encodeURIComponent(url);
+        } else if (url instanceof Request && url.url.includes('huggingface.co')) {
+          url = new Request('https://corsproxy.io/?' + encodeURIComponent(url.url), url);
+        }
+        return _origFetch.call(this, url, opts);
+      };
+      window._hfProxied = true;
+    }
+
     if (!transcriber || currentModel !== modelId) {
       const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
       env.allowLocalModels = false;
-      env.useBrowserCache = false;
+      env.useBrowserCache = true;
 
       transcriber = await pipeline('automatic-speech-recognition', modelId, {
         quantized: true,
