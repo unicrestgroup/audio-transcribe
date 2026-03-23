@@ -480,9 +480,9 @@
 
     <div class="model-row">
       <select id="model-select">
-        <option value="onnx-community/whisper-tiny.en" selected>Whisper Tiny EN (~40 MB, fast)</option>
-        <option value="onnx-community/whisper-base">Whisper Base (~140 MB, balanced)</option>
-        <option value="onnx-community/whisper-small">Whisper Small (~460 MB, accurate)</option>
+        <option value="Xenova/whisper-tiny.en" selected>Whisper Tiny EN (~40 MB, fast)</option>
+        <option value="Xenova/whisper-base.en">Whisper Base EN (~140 MB, balanced)</option>
+        <option value="Xenova/whisper-small.en">Whisper Small EN (~460 MB, accurate)</option>
       </select>
       <select id="file-lang">
         <option value="en">English</option>
@@ -825,7 +825,20 @@ transcribeBtn.addEventListener('click', async () => {
   lastChunks = [];
 
   try {
+    // Step 0: Test connectivity to Hugging Face
+    progressText.textContent = 'Checking connection to Hugging Face...';
+    const testUrl = 'https://huggingface.co/api/models/Xenova/whisper-tiny.en';
+    try {
+      const testResp = await fetch(testUrl, { method: 'HEAD', mode: 'cors' });
+      if (!testResp.ok) {
+        throw new Error('Hugging Face returned status ' + testResp.status + '. The model server may be temporarily unavailable. Try again in a minute.');
+      }
+    } catch (connErr) {
+      throw new Error('Cannot reach huggingface.co from this domain. Try deploying on Netlify or Vercel instead, or open the HTML file directly from your computer (File → Open). Detail: ' + connErr.message);
+    }
+
     // Step 1: Decode audio
+    progressText.textContent = 'Decoding audio...';
     const audioData = await decodeAudioFile(selectedFile);
     progressBar.style.width = '10%';
     progressText.textContent = 'Loading Whisper model (first time may take a minute)...';
@@ -836,10 +849,6 @@ transcribeBtn.addEventListener('click', async () => {
       const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.4.1');
 
       transcriber = await pipeline('automatic-speech-recognition', modelId, {
-        dtype: {
-          encoder_model: 'fp32',
-          decoder_model_merged: 'q4',
-        },
         device: 'wasm',
         progress_callback: (progress) => {
           if (progress.status === 'downloading' || progress.status === 'progress') {
@@ -894,11 +903,7 @@ transcribeBtn.addEventListener('click', async () => {
 
   } catch (err) {
     console.error('Transcription error:', err);
-    if (err.message && err.message.includes('Forbidden')) {
-      progressText.textContent = 'Model download blocked. This feature requires hosting on a real URL (GitHub Pages, Netlify, etc). Download this HTML file and deploy it.';
-    } else {
-      progressText.textContent = 'Error: ' + err.message;
-    }
+    progressText.textContent = err.message;
     progressBar.style.width = '0%';
   }
 
