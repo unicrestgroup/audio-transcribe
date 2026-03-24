@@ -7,10 +7,6 @@
     {
       "source": "/api/resolve-cache/:path*",
       "destination": "https://huggingface.co/api/resolve-cache/:path*"
-    },
-    {
-      "source": "/anthropic/:path*",
-      "destination": "https://api.anthropic.com/:path*"
     }
   ]
 }
